@@ -240,6 +240,7 @@ bool GSCam::init_stream()
   RCLCPP_INFO(get_logger(), "Time offset: %.6f", rclcpp::Time(time_offset_).seconds());
 
   gst_element_set_state(pipeline_, GST_STATE_PAUSED);
+  RCLCPP_INFO(get_logger(), "Stream is PAUSING...");
 
   if (gst_element_get_state(pipeline_, NULL, NULL, -1) == GST_STATE_CHANGE_FAILURE) {
     RCLCPP_FATAL(get_logger(), "Failed to PAUSE stream, check your gstreamer configuration.");
@@ -307,7 +308,7 @@ void GSCam::publish_stream()
     // This should block until a new frame is awake, this way, we'll run at the
     // actual capture framerate of the device.
     // RCLCPP_DEBUG(get_logger(), "Getting data...");
-    GstSample * sample = gst_app_sink_pull_sample(GST_APP_SINK(sink_));
+    GstSample * sample = gst_app_sink_try_pull_sample(GST_APP_SINK(sink_), 5 * GST_SECOND);
     if (!sample) {
       RCLCPP_ERROR(get_logger(), "Could not get gstreamer sample.");
       break;
