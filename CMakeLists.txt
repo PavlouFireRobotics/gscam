@@ -6,7 +6,7 @@ project(gscam)
 find_package(PkgConfig)
 
 pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0)
-pkg_check_modules(GST_APP REQUIRED gstreamer-app-1.0)
+pkg_check_modules(GST_APP REQUIRED gstreamer-app-1.0 gstreamer-video-1.0)
 
 find_package(ament_cmake REQUIRED)
 find_package(class_loader REQUIRED)
@@ -55,10 +55,14 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest)
+  ament_add_gtest(appsink_test test/appsink_test.cpp)
+  if(TARGET appsink_test)
+    target_link_libraries(appsink_test ${GST_APP_LIBRARIES})
+  endif()
   ament_add_gtest(
     smoke_test
     test/smoke_test.cpp
-    ENV GSCAM_CONFIG="videotestsrc pattern=snow ! capsfilter caps=video/x-raw,width=800,height=600 ! videoconvert"
+    ENV GSCAM_CONFIG="videotestsrc is-live=true pattern=red ! capsfilter caps=video/x-raw,width=641,height=480,framerate=30/1 ! videoconvert"
   )
   if(TARGET smoke_test)
     target_link_libraries(smoke_test gscam)

@@ -16,12 +16,15 @@
 #include <unistd.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <cmath>
+#include <cstring>
 #include <iostream>
 #include <string>
 
 extern "C" {
 #include "gst/gst.h"
 #include "gst/app/gstappsink.h"
+#include "gst/video/video.h"
 }
 
 #include "image_transport/image_transport.hpp"
@@ -33,6 +36,7 @@ extern "C" {
 #include "sensor_msgs/image_encodings.hpp"
 
 #include "gscam/gscam.hpp"
+#include "gscam/appsink.hpp"
 
 namespace gscam
 {
@@ -98,6 +102,14 @@ bool GSCam::configure()
   preroll_ = declare_parameter("preroll", false);
   use_gst_timestamps_ = declare_parameter("use_gst_timestamps", false);
 
+  sample_timeout_sec_ = declare_parameter("sample_timeout_sec", 5.0);
+  if (!std::isfinite(sample_timeout_sec_) || sample_timeout_sec_ <= 0.0 ||
+    sample_timeout_sec_ > 60.0)
+  {
+    RCLCPP_FATAL(get_logger(), "sample_timeout_sec must be in (0, 60].");
+    return false;
+  }
+
   reopen_on_eof_ = declare_parameter("reopen_on_eof", false);
 
   // Get the camera parameters file
@@ -159,7 +171,10 @@ bool GSCam::init_stream()
 
   // Create RGB sink
   sink_ = gst_element_factory_make("appsink", NULL);
-  GstCaps * caps = gst_app_sink_get_caps(GST_APP_SINK(sink_));
+  // Publishing (including synchronous image transport encoding) may be slower
+  // than decoding. Retain only the latest frame instead of accumulating video.
+  configure_latest_frame_sink(GST_APP_SINK(sink_));
+  GstCaps * caps = NULL;
 
   // http://gstreamer.freedesktop.org/data/doc/gstreamer/head/pwg/html/section-types-definitions.html
   if (image_encoding_ == sensor_msgs::image_encodings::RGB8) {
@@ -236,8 +251,8 @@ bool GSCam::init_stream()
   GstClock * clock = gst_system_clock_obtain();
   GstClockTime ct = gst_clock_get_time(clock);
   gst_object_unref(clock);
-  time_offset_ = now().nanoseconds() - GST_TIME_AS_NSECONDS(ct);
-  RCLCPP_INFO(get_logger(), "Time offset: %.6f", rclcpp::Time(time_offset_).seconds());
+  time_offset_ = now().nanoseconds() - static_cast<int64_t>(ct);
+  RCLCPP_INFO(get_logger(), "Time offset: %.6f", static_cast<double>(time_offset_) / GST_SECOND);
 
   gst_element_set_state(pipeline_, GST_STATE_PAUSED);
   RCLCPP_INFO(get_logger(), "Stream is PAUSING...");
@@ -250,7 +265,7 @@ bool GSCam::init_stream()
   }
 
   // Create ROS camera interface
-  const auto qos = use_sensor_data_qos_ ? rclcpp::SensorDataQoS() : rclcpp::QoS{1};
+  const auto qos = use_sensor_data_qos_ ? rclcpp::SensorDataQoS().keep_last(1) : rclcpp::QoS{1};
   if (image_encoding_ == "jpeg") {
     jpeg_pub_ =
       create_publisher<sensor_msgs::msg::CompressedImage>(
@@ -308,58 +323,76 @@ void GSCam::publish_stream()
     // This should block until a new frame is awake, this way, we'll run at the
     // actual capture framerate of the device.
     // RCLCPP_DEBUG(get_logger(), "Getting data...");
-    GstSample * sample = gst_app_sink_try_pull_sample(GST_APP_SINK(sink_), 5 * GST_SECOND);
+    GstSample * sample = gst_app_sink_try_pull_sample(
+      GST_APP_SINK(sink_), static_cast<GstClockTime>(sample_timeout_sec_ * GST_SECOND));
     if (!sample) {
-      RCLCPP_ERROR(get_logger(), "Could not get gstreamer sample.");
+      GstBus * bus = gst_element_get_bus(pipeline_);
+      GstMessage * message = gst_bus_pop_filtered(bus, GST_MESSAGE_ERROR);
+      if (message) {
+        GError * error = NULL;
+        gchar * debug = NULL;
+        gst_message_parse_error(message, &error, &debug);
+        RCLCPP_ERROR(get_logger(), "GStreamer %s: %s (%s)",
+          GST_OBJECT_NAME(message->src), error->message, debug ? debug : "no details");
+        g_error_free(error);
+        g_free(debug);
+        gst_message_unref(message);
+      }
+      gst_object_unref(bus);
+      RCLCPP_ERROR(get_logger(), "No GStreamer sample within %.1f s (EOS=%s).",
+        sample_timeout_sec_, gst_app_sink_is_eos(GST_APP_SINK(sink_)) ? "true" : "false");
       break;
     }
     GstBuffer * buf = gst_sample_get_buffer(sample);
-    GstMemory * memory = gst_buffer_get_memory(buf, 0);
-    GstMapInfo info;
-
-    gst_memory_map(memory, &info, GST_MAP_READ);
-    gsize & buf_size = info.size;
-    guint8 * & buf_data = info.data;
-
-    GstClockTime bt = gst_element_get_base_time(pipeline_);
-    // RCLCPP_INFO(
-    //   get_logger(),
-    //   "New buffer: timestamp %.6f %lu %lu %.3f",
-    //   GST_TIME_AS_USECONDS(buf->timestamp + bt) / 1e6 + time_offset_,
-    //   buf->timestamp, bt, time_offset_);
-
-
-#if 0
-    GstFormat fmt = GST_FORMAT_TIME;
-    gint64 current = -1;
-
-    Query the current position of the stream
-    if (gst_element_query_position(pipeline_, &fmt, &current)) {
-      RCLCPP_INFO_STREAM(get_logger(), "Position " << current);
-    }
-#endif
-
-    // Stop on end of stream
     if (!buf) {
-      RCLCPP_INFO(get_logger(), "Stream ended.");
+      gst_sample_unref(sample);
+      RCLCPP_ERROR(get_logger(), "GStreamer sample has no buffer.");
       break;
     }
-
-    // RCLCPP_DEBUG(get_logger(), "Got data.");
-
-    // Get the image width and height
-    GstPad * pad = gst_element_get_static_pad(sink_, "sink");
-    const GstCaps * caps = gst_pad_get_current_caps(pad);
-    GstStructure * structure = gst_caps_get_structure(caps, 0);
-    gst_structure_get_int(structure, "width", &width_);
-    gst_structure_get_int(structure, "height", &height_);
+    // Sample caps are borrowed: do not acquire a pad/caps reference per frame.
+    GstCaps * caps = gst_sample_get_caps(sample);
+    GstVideoInfo video_info;
+    GstVideoFrame frame = {};
+    GstMapInfo info = {};
+    if (image_encoding_ == "jpeg") {
+      if (!gst_buffer_map(buf, &info, GST_MAP_READ)) {
+        gst_sample_unref(sample);
+        RCLCPP_ERROR(get_logger(), "Could not map JPEG buffer.");
+        break;
+      }
+    } else {
+      if (!caps || !gst_video_info_from_caps(&video_info, caps) ||
+        !gst_video_frame_map(&frame, &video_info, buf, GST_MAP_READ))
+      {
+        gst_sample_unref(sample);
+        RCLCPP_ERROR(get_logger(), "Could not map video frame.");
+        break;
+      }
+      width_ = GST_VIDEO_INFO_WIDTH(&video_info);
+      height_ = GST_VIDEO_INFO_HEIGHT(&video_info);
+    }
 
     // Update header information
     sensor_msgs::msg::CameraInfo cur_cinfo = camera_info_manager_.getCameraInfo();
     sensor_msgs::msg::CameraInfo::SharedPtr cinfo;
     cinfo.reset(new sensor_msgs::msg::CameraInfo(cur_cinfo));
     if (use_gst_timestamps_) {
-      cinfo->header.stamp = rclcpp::Time(GST_TIME_AS_NSECONDS(buf->pts + bt) + time_offset_);
+      const GstSegment * segment = gst_sample_get_segment(sample);
+      const GstClockTime running_time = segment && GST_BUFFER_PTS_IS_VALID(buf) ?
+        gst_segment_to_running_time(segment, GST_FORMAT_TIME, GST_BUFFER_PTS(buf)) :
+        GST_CLOCK_TIME_NONE;
+      if (!GST_CLOCK_TIME_IS_VALID(running_time)) {
+        RCLCPP_WARN(get_logger(), "Dropping frame with invalid GStreamer timestamp.");
+        if (image_encoding_ == "jpeg") {
+          gst_buffer_unmap(buf, &info);
+        } else {
+          gst_video_frame_unmap(&frame);
+        }
+        gst_sample_unref(sample);
+        continue;
+      }
+      cinfo->header.stamp = rclcpp::Time(
+        static_cast<int64_t>(running_time + gst_element_get_base_time(pipeline_)) + time_offset_);
     } else {
       cinfo->header.stamp = now();
     }
@@ -369,23 +402,17 @@ void GSCam::publish_stream()
       sensor_msgs::msg::CompressedImage::SharedPtr img(new sensor_msgs::msg::CompressedImage());
       img->header = cinfo->header;
       img->format = "jpeg";
-      img->data.resize(buf_size);
+      img->data.resize(info.size);
       std::copy(
-        buf_data, (buf_data) + (buf_size),
+        info.data, info.data + info.size,
         img->data.begin());
       jpeg_pub_->publish(*img);
       cinfo_pub_->publish(*cinfo);
     } else {
-      // Complain if the returned buffer is smaller than we expect
-      const unsigned int expected_frame_size =
-        width_ * height_ * sensor_msgs::image_encodings::numChannels(image_encoding_);
-
-      if (buf_size < expected_frame_size) {
-        RCLCPP_WARN_STREAM(
-          get_logger(), "GStreamer image buffer underflow: Expected frame to be " <<
-            expected_frame_size << " bytes but got only " <<
-            buf_size << " bytes. (make sure frames are correctly encoded)");
-      }
+      const size_t bytes_per_pixel = image_encoding_ == sensor_msgs::image_encodings::YUV422 ?
+        2 : sensor_msgs::image_encodings::numChannels(image_encoding_);
+      const size_t row_size = static_cast<size_t>(width_) * bytes_per_pixel;
+      const size_t expected_frame_size = row_size * height_;
 
       // Construct Image message
       sensor_msgs::msg::Image::SharedPtr img(new sensor_msgs::msg::Image());
@@ -402,23 +429,24 @@ void GSCam::publish_stream()
       // Copy only the data we received
       // Since we're publishing shared pointers, we need to copy the image so
       // we can free the buffer allocated by gstreamer
-      img->step = width_ * sensor_msgs::image_encodings::numChannels(image_encoding_);
-
-      std::copy(
-        buf_data,
-        (buf_data) + (buf_size),
-        img->data.begin());
+      img->step = row_size;
+      const auto * pixels = static_cast<const guint8 *>(GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
+      const gint stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
+      // GStreamer rows can include alignment padding; ROS rows are packed.
+      for (int row = 0; row < height_; ++row) {
+        std::memcpy(img->data.data() + row * row_size, pixels + row * stride, row_size);
+      }
 
       // Publish the image/info
       camera_pub_.publish(img, cinfo);
     }
 
-    // Release the buffer
-    if (buf) {
-      gst_memory_unmap(memory, &info);
-      gst_memory_unref(memory);
-      gst_sample_unref(sample);
+    if (image_encoding_ == "jpeg") {
+      gst_buffer_unmap(buf, &info);
+    } else {
+      gst_video_frame_unmap(&frame);
     }
+    gst_sample_unref(sample);
   }
 }
 

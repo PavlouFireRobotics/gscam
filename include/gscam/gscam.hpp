@@ -58,6 +58,7 @@ private:
   GstElement * sink_;
 
   // Appsink configuration
+  double sample_timeout_sec_;
   bool sync_sink_;
   bool preroll_;
   bool reopen_on_eof_;
@@ -73,7 +74,7 @@ private:
 
   // ROS Inteface
   // Calibration between ros::Time and gst timestamps
-  uint64_t time_offset_;
+  int64_t time_offset_;
   camera_info_manager::CameraInfoManager camera_info_manager_;
   image_transport::CameraPublisher camera_pub_;
   // Case of a jpeg only publisher

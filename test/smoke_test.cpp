@@ -37,6 +37,12 @@ TEST(SmokeTest, smoke_test)  // NOLINT
   // Future-proof: enable zero-copy IPC when it is available
   // https://github.com/ros-perception/image_common/issues/212
   // options.use_intra_process_comms(true);
+  options.parameter_overrides({
+    rclcpp::Parameter("use_sensor_data_qos", true),
+    rclcpp::Parameter("use_gst_timestamps", true),
+    rclcpp::Parameter("sync_sink", false),
+    rclcpp::Parameter("camera.image_raw.enable_pub_plugins",
+      std::vector<std::string>{"image_transport/raw"})});
   auto cam_node = std::make_shared<gscam::GSCam>(options);
   auto sub_node = std::make_shared<rclcpp::Node>("sub_node", options);
 
@@ -45,17 +51,29 @@ TEST(SmokeTest, smoke_test)  // NOLINT
   executor.add_node(sub_node);
 
   int count = 0;
+  int64_t last_stamp = 0;
 
   auto sub = sub_node->create_subscription<sensor_msgs::msg::Image>(
-    topic, 10,
+    topic, rclcpp::SensorDataQoS().keep_last(5),
     [&](const sensor_msgs::msg::Image::ConstSharedPtr image)  // NOLINT
     {
       // Match GSCAM_CONFIG and param defaults
       EXPECT_EQ(image->header.frame_id, "camera_frame");
-      EXPECT_EQ(image->width, 800u);
-      EXPECT_EQ(image->height, 600u);
+      EXPECT_EQ(image->width, 641u);
+      EXPECT_EQ(image->height, 480u);
       EXPECT_EQ(image->encoding, sensor_msgs::image_encodings::RGB8);
       EXPECT_EQ(image->data.size(), image->width * image->height * 3);
+      EXPECT_EQ(image->step, image->width * 3);
+      // Odd RGB width exercises GstVideoFrame's padded row stride.
+      for (size_t row = 0; row < image->height; ++row) {
+        const size_t offset = row * image->step;
+        EXPECT_EQ(image->data[offset], 255);
+        EXPECT_EQ(image->data[offset + 1], 0);
+        EXPECT_EQ(image->data[offset + 2], 0);
+      }
+      const int64_t stamp = rclcpp::Time(image->header.stamp).nanoseconds();
+      EXPECT_GT(stamp, last_stamp);
+      last_stamp = stamp;
       count++;
     }
   );
@@ -64,12 +82,12 @@ TEST(SmokeTest, smoke_test)  // NOLINT
 
   EXPECT_EQ(0, count);
 
-  for (size_t loop = 0; count < 1 && loop < max_loops; ++loop) {
+  for (size_t loop = 0; count < 20 && loop < max_loops; ++loop) {
     std::this_thread::sleep_for(sleep_per_loop);
     executor.spin_some();
   }
 
-  EXPECT_GT(count, 0);
+  EXPECT_GE(count, 20);
 }
 
 int main(int argc, char ** argv)
