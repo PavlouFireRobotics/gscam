@@ -63,6 +63,39 @@ Note that GStreamer is licensed under the LGPL, and GStreamer plugins have their
 * `image_encoding`: image encoding ("rgb8", "mono8", "yuv422", "jpeg")
 * `use_sensor_data_qos`: The flag to use sensor data qos for camera topic(image, camera_info)
 
+## Live-stream behavior
+
+The appsink retains one decoded frame and drops older decoded frames when ROS
+publication is slower than decoding. GStreamer row padding is removed when
+copying raw pixels into ROS Image messages. An uncalibrated CameraInfo message
+uses the actual decoded image dimensions and remains uncalibrated (K[0] = 0).
+
+Additional parameters:
+
+* `use_image_transport` (default `true`): set to `false` to publish raw Image and
+  CameraInfo directly, without loading image_transport publisher plugins. This is
+  useful on Foxy when raw images are the only required output. JPEG input retains
+  its direct CompressedImage publisher.
+* `startup_timeout_sec` (default `5.0`): maximum wait for each startup state
+  transition, including optional preroll. Must be finite and in (0, 60].
+* `sample_timeout_sec` (default `5.0`): maximum wait without a sample before
+  stopping the stream. Must be finite and in (0, 60]. Shutdown is checked every
+  100 ms while waiting for a sample.
+
+Supply a pipeline without its own sink: gscam appends an appsink. End explicit
+output caps with an element, for example
+`videotestsrc is-live=true ! capsfilter caps=video/x-raw,format=RGB`.
+Malformed or incomplete pipelines are rejected. Configuration and stream failures
+clean up the pipeline and shut down the node context so an external launcher can
+restart a standalone node. In a component container, that context can be shared
+with other nodes.
+
+With `use_gst_timestamps=false`, headers use publication time, not exposure time.
+Enable GStreamer timestamps only after validating the decoder's timestamp
+behavior. Frames with invalid GStreamer timestamps are dropped when enabled.
+Hardware decoder plugins and device permissions are supplied by the deployment;
+this package does not install Rockchip MPP/RGA.
+
 ## Examples
 
 See example launch files and configs in the [examples](examples) directory.

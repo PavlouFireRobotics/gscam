@@ -37,11 +37,13 @@ TEST(SmokeTest, smoke_test)  // NOLINT
   // Future-proof: enable zero-copy IPC when it is available
   // https://github.com/ros-perception/image_common/issues/212
   // options.use_intra_process_comms(true);
-  options.parameter_overrides({
+  options.parameter_overrides(
+  {
     rclcpp::Parameter("use_sensor_data_qos", true),
     rclcpp::Parameter("use_gst_timestamps", true),
     rclcpp::Parameter("sync_sink", false),
-    rclcpp::Parameter("camera.image_raw.enable_pub_plugins",
+    rclcpp::Parameter(
+      "camera.image_raw.enable_pub_plugins",
       std::vector<std::string>{"image_transport/raw"})});
   auto cam_node = std::make_shared<gscam::GSCam>(options);
   auto sub_node = std::make_shared<rclcpp::Node>("sub_node", options);

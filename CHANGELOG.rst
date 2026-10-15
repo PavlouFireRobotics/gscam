@@ -2,6 +2,15 @@
 Changelog for package gscam
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Forthcoming
+-----------
+* Support Foxy dependency exports while retaining modern CMake target linking.
+* Add optional direct raw publication without image_transport publisher plugins.
+* Bound startup waits, reject partial pipelines, and clean up failed streams.
+* Make sample waits responsive to shutdown and stop the node context on failure.
+* Populate uncalibrated CameraInfo dimensions from decoded frames.
+* Add synthetic stream tests for publication modes, timestamps, and failure paths.
+
 2.0.4 (2026-02-16)
 ------------------
 * fix: update wrong target (`#105 <https://github.com/ros-drivers/gscam/issues/105>`_)

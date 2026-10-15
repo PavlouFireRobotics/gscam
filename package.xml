@@ -16,10 +16,12 @@
   <author email="chriscrick@cs.brown.edu">Christopher Crick</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>pkg-config</build_depend>
 
   <depend>libgstreamer1.0-dev</depend>
   <depend>libgstreamer-plugins-base1.0-dev</depend>
   <depend>gstreamer1.0-plugins-good</depend>
+  <exec_depend>gstreamer1.0-plugins-base</exec_depend>
 
   <depend>class_loader</depend>
   <depend>rclcpp</depend>

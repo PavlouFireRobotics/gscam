@@ -15,8 +15,10 @@
 #ifndef GSCAM__GSCAM_HPP_
 #define GSCAM__GSCAM_HPP_
 
+#include <atomic>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 extern "C" {
 #include "gst/gst.h"
@@ -45,6 +47,7 @@ public:
 private:
   bool configure();
   bool init_stream();
+  bool set_pipeline_state(GstState state);
   void publish_stream();
   void cleanup_stream();
 
@@ -59,6 +62,7 @@ private:
 
   // Appsink configuration
   double sample_timeout_sec_;
+  double startup_timeout_sec_;
   bool sync_sink_;
   bool preroll_;
   bool reopen_on_eof_;
@@ -71,12 +75,14 @@ private:
   std::string camera_name_;
   std::string camera_info_url_;
   bool use_sensor_data_qos_;
+  bool use_image_transport_;
 
   // ROS Inteface
   // Calibration between ros::Time and gst timestamps
   int64_t time_offset_;
   camera_info_manager::CameraInfoManager camera_info_manager_;
   image_transport::CameraPublisher camera_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
   // Case of a jpeg only publisher
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr jpeg_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr cinfo_pub_;
