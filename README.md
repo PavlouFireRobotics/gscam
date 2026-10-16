@@ -107,3 +107,21 @@ These examples have been tested and work well:
   [compressed images](https://docs.ros2.org/foxy/api/sensor_msgs/msg/CompressedImage.html)
 * [videofile.launch.xml](examples/videofile.launch.xml): Opens any videofile readable by GStreamer
 * [component_pipeline_launch.py](examples/component_pipeline_launch.py): Launch an image pipeline using [ROS2 composition](https://docs.ros.org/en/foxy/Tutorials/Composition.html)
+
+## Launch an RTSP feed
+
+`image_feed.launch.py` reads one camera's stream configuration from an explicit
+YAML path. Camera-specific YAMLs belong in the corresponding camera configuration
+or calibration package; gscam does not depend on those packages.
+
+```sh
+ros2 launch gscam image_feed.launch.py feed_config:=/absolute/path/to/camera.yaml
+```
+
+The YAML requires `feed_name`, `rtsp_url`, and `frame_id`. Optional settings include
+`namespace`, `camera_name`, `camera_info_url`, `decoder` (`rockchip` or `software`),
+`codec` (`h264` or `h265`), `protocols` (`tcp` or `udp`), and `latency` (milliseconds).
+`decoder:=software` and `namespace:=cameras` override the YAML values. If omitted,
+namespace defaults to the root namespace and camera name defaults to `feed_name`.
+The launcher publishes `<feed_name>/image_raw` and `<feed_name>/camera_info` under
+the selected namespace, and respawns the decoder after two seconds on failure.

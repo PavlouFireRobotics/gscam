@@ -110,7 +110,7 @@ install(TARGETS gscam
 )
 
 install(
-  DIRECTORY "examples"
+  DIRECTORY "examples" "launch"
   DESTINATION "share/${PROJECT_NAME}"
 )
 
